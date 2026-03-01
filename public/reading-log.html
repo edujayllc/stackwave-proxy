@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reading Log</title>
+<style>
+  :root {
+    --bg: #0D0618; --card: #1A0A2E; --border: #3D2060;
+    --teal: #00E5CC; --teal-dim: rgba(0,229,204,0.12);
+    --text: #E8E0F0; --muted: #9B8AAE; --radius: 12px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: sans-serif; background: var(--bg); color: var(--text); padding: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 14px; }
+  label { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; margin-bottom: 5px; margin-top: 12px; }
+  input, select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; color: var(--text);
+    font-size: 15px; outline: none; -webkit-appearance: none; appearance: none;
+  }
+  input:focus, select:focus { border-color: var(--teal); }
+  .btn {
+    width: 100%; padding: 13px; background: var(--teal); color: var(--bg);
+    border: none; border-radius: 8px; font-size: 15px; font-weight: 700;
+    cursor: pointer; margin-top: 14px; display: block;
+  }
+  .btn:disabled { opacity: 0.5; }
+  .btn-secondary {
+    width: 100%; padding: 13px; background: transparent;
+    border: 1px solid var(--teal); color: var(--teal);
+    border-radius: 8px; font-size: 15px; font-weight: 700;
+    cursor: pointer; margin-top: 10px; display: block;
+  }
+  #debug {
+    background: #000; border: 1px solid #333; border-radius: 8px;
+    padding: 12px; margin-bottom: 14px; font-family: monospace;
+    font-size: 11px; max-height: 180px; overflow-y: auto;
+  }
+  #debug .line { margin-bottom: 4px; }
+  #debug .ok  { color: #00E5CC; }
+  #debug .err { color: #FF6B6B; }
+  #debug .inf { color: #aaa; }
+  .toast {
+    display: none; padding: 12px; border-radius: 8px;
+    font-size: 13px; font-weight: 500; margin-top: 10px; text-align: center;
+  }
+  .toast.success { background: rgba(0,229,204,0.12); border: 1px solid var(--teal); color: var(--teal); }
+  .toast.error   { background: rgba(255,107,107,0.12); border: 1px solid #FF6B6B; color: #FF6B6B; }
+  h2 { font-size: 16px; color: var(--teal); margin-bottom: 12px; }
+</style>
+</head>
+<body>
+
+<div id="debug"><div class="line inf">🔍 Debug — waiting for interaction</div></div>
+
+<div class="card">
+  <h2>📚 Log a Book</h2>
+  <label>Phone (10 digits)</label>
+  <input type="tel" id="form-phone" placeholder="4236472009" maxlength="10" inputmode="numeric">
+  <label>Book Title</label>
+  <input type="text" id="form-book" placeholder="What did you read?">
+  <label>Days Read This Week</label>
+  <select id="form-days">
+    <option value="">Select...</option>
+    <option value="1">1 day</option>
+    <option value="2">2 days</option>
+    <option value="3">3 days</option>
+    <option value="4">4 days ⚡ 50 pts</option>
+    <option value="5">5 days ⚡ 50 pts</option>
+    <option value="6">6 days ⚡ 50 pts</option>
+    <option value="7">7 days ⚡ 50 pts</option>
+  </select>
+  <button class="btn" id="btn-submit">Submit Reading Log</button>
+  <div class="toast" id="toast"></div>
+</div>
+
+<div class="card">
+  <h2>📖 My History</h2>
+  <label>Phone (10 digits)</label>
+  <input type="tel" id="history-phone" placeholder="4236472009" maxlength="10" inputmode="numeric">
+  <button class="btn-secondary" id="btn-history">View My History</button>
+  <div id="history-container"></div>
+</div>
+
+<script>
+  const PROXY     = 'https://stackwave-proxy.vercel.app/api/boomerang';
+  const SHEET_CSV = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRb_Db2YuBcQZ_qrZbQgML2TRf9D98KcAxzTWSB32f4sCN4S7v2_Fv6tHXklI8CTpxoxrMg3qkIJlWi/pub?gid=16639804&single=true&output=csv';
+
+  function log(msg, type='inf') {
+    const d = document.getElementById('debug');
+    const el = document.createElement('div');
+    el.className = 'line ' + type;
+    el.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+    d.appendChild(el);
+    d.scrollTop = d.scrollHeight;
+  }
+
+  function normalizePhone(raw) {
+    const d = raw.replace(/\D/g,'');
+    if (d.length === 10) return '1' + d;
+    if (d.length === 11 && d.startsWith('1')) return d;
+    return d;
+  }
+
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg; t.className = 'toast ' + type; t.style.display = 'block';
+  }
+  function hideToast() { document.getElementById('toast').style.display = 'none'; }
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  // Attach events after DOM ready
+  document.addEventListener('DOMContentLoaded', function() {
+    log('DOM ready — attaching events');
+
+    document.getElementById('btn-submit').addEventListener('click', submitLog);
+    document.getElementById('btn-history').addEventListener('click', loadHistory);
+
+    log('Events attached', 'ok');
+
+    // Restore session
+    const serial = localStorage.getItem('sw_serial');
+    const phone  = localStorage.getItem('sw_phone');
+    if (serial && phone) {
+      log('Session restored: ' + serial, 'ok');
+      const display = phone.startsWith('1') ? phone.slice(1) : phone;
+      document.getElementById('form-phone').value = display;
+      document.getElementById('history-phone').value = display;
+      loadHistoryBySerial(serial);
+    }
+  });
+
+  async function submitLog() {
+    log('Submit clicked');
+    const rawPhone = document.getElementById('form-phone').value.trim();
+    const book     = document.getElementById('form-book').value.trim();
+    const days     = document.getElementById('form-days').value;
+
+    if (!rawPhone || rawPhone.replace(/\D/g,'').length < 10) { showToast('Enter a valid 10-digit phone number.', 'error'); return; }
+    if (!book)  { showToast('Enter a book title.', 'error'); return; }
+    if (!days)  { showToast('Select days read.', 'error'); return; }
+
+    const phone = normalizePhone(rawPhone);
+    log('Phone: ' + phone);
+
+    const btn = document.getElementById('btn-submit');
+    btn.disabled = true;
+    btn.textContent = 'Submitting...';
+    hideToast();
+
+    try {
+      const url = `${PROXY}?endpoint=webhook&phone=${encodeURIComponent(phone)}&book=${encodeURIComponent(book)}&days=${encodeURIComponent(days)}`;
+      log('Proxy webhook call...');
+      const r = await fetch(url);
+      const d = await r.json();
+      log('Webhook: ' + JSON.stringify(d), d.ok ? 'ok' : 'err');
+
+      localStorage.setItem('sw_phone', phone);
+      const serial = await lookupAndSaveSerial(phone);
+
+      const pts = parseInt(days) >= 4 ? 50 : 0;
+      showToast(pts > 0 ? `✅ Logged! +${pts} Wave Points on their way.` : `✅ Logged! Read 4+ days to earn 50 pts.`, 'success');
+      document.getElementById('form-book').value = '';
+      document.getElementById('form-days').value = '';
+
+      if (serial) setTimeout(() => loadHistoryBySerial(serial), 4000);
+
+    } catch(e) {
+      log('Error: ' + e.message, 'err');
+      showToast('Something went wrong. Check debug panel.', 'error');
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Submit Reading Log';
+  }
+
+  async function lookupAndSaveSerial(phone) {
+    try {
+      log('Customer lookup...');
+      const cr = await fetch(`${PROXY}?endpoint=customer&phone=${encodeURIComponent(phone)}`);
+      const cd = await cr.json();
+      if (!cd.data || !cd.data[0]) { log('No customer', 'err'); return null; }
+      const cid = cd.data[0].id;
+      log('Customer: ' + cid, 'ok');
+
+      const kr = await fetch(`${PROXY}?endpoint=card&customerId=${encodeURIComponent(cid)}`);
+      const kd = await kr.json();
+      if (!kd.data || !kd.data[0]) { log('No card', 'err'); return null; }
+      const serial = kd.data[0].id;
+      log('Serial: ' + serial, 'ok');
+      localStorage.setItem('sw_serial', serial);
+      return serial;
+    } catch(e) {
+      log('Lookup error: ' + e.message, 'err');
+      return null;
+    }
+  }
+
+  async function loadHistory() {
+    log('History clicked');
+    const rawPhone = document.getElementById('history-phone').value.trim();
+    if (!rawPhone || rawPhone.replace(/\D/g,'').length < 10) { log('Invalid phone', 'err'); return; }
+
+    const phone      = normalizePhone(rawPhone);
+    const savedPhone = localStorage.getItem('sw_phone');
+    let   serial     = localStorage.getItem('sw_serial');
+
+    document.getElementById('history-container').innerHTML = '<div style="color:#9B8AAE;padding:16px;text-align:center">Loading...</div>';
+
+    if (!serial || savedPhone !== phone) {
+      localStorage.setItem('sw_phone', phone);
+      serial = await lookupAndSaveSerial(phone);
+    } else {
+      log('Using cached serial', 'ok');
+    }
+
+    if (!serial) {
+      document.getElementById('history-container').innerHTML = '<div style="color:#FF6B6B;padding:16px;text-align:center">Phone not found. Make sure you have a Wave Pass.</div>';
+      return;
+    }
+
+    const display = phone.startsWith('1') ? phone.slice(1) : phone;
+    document.getElementById('form-phone').value = display;
+    loadHistoryBySerial(serial);
+  }
+
+  async function loadHistoryBySerial(serial) {
+    log('Loading sheet...');
+    document.getElementById('history-container').innerHTML = '<div style="color:#9B8AAE;padding:16px;text-align:center">Loading...</div>';
+    try {
+      const res  = await fetch(`${SHEET_CSV}&cachebust=${Date.now()}`);
+      const text = await res.text();
+      const rows = parseCSV(text);
+      log('Rows: ' + rows.length + ', serial: ' + serial);
+      const mine = rows.filter(r => r[8] && r[8].trim() === serial.trim());
+      log('My rows: ' + mine.length, mine.length > 0 ? 'ok' : 'inf');
+      renderHistory(mine);
+    } catch(e) {
+      log('Sheet error: ' + e.message, 'err');
+      document.getElementById('history-container').innerHTML = '<div style="color:#FF6B6B;padding:16px">Could not load history.</div>';
+    }
+  }
+
+  function parseCSV(text) {
+    return text.trim().split('\n').slice(1).map(line => {
+      const r = []; let c = '', q = false;
+      for (let i = 0; i < line.length; i++) {
+        if (line[i]==='"') { q=!q; }
+        else if (line[i]===',' && !q) { r.push(c.trim()); c=''; }
+        else { c+=line[i]; }
+      }
+      r.push(c.trim());
+      return r;
+    }).filter(r => r[0] && r[0].length > 0);
+  }
+
+  function renderHistory(rows) {
+    const c = document.getElementById('history-container');
+    if (rows.length === 0) {
+      c.innerHTML = '<div style="color:#9B8AAE;padding:16px;text-align:center">No logs yet. Submit your first book above!</div>';
+      return;
+    }
+    const sorted   = [...rows].sort((a,b) => (b[0]||'').localeCompare(a[0]||''));
+    const totalPts = sorted.reduce((s,r) => s+(parseInt(r[5])||0), 0);
+    c.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0">
+        <div style="background:#0D0618;border:1px solid #3D2060;border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:22px;font-weight:700;color:#00E5CC">${sorted.length}</div>
+          <div style="font-size:11px;color:#9B8AAE;margin-top:3px">BOOKS LOGGED</div>
+        </div>
+        <div style="background:#0D0618;border:1px solid #3D2060;border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:22px;font-weight:700;color:#00E5CC">${totalPts}</div>
+          <div style="font-size:11px;color:#9B8AAE;margin-top:3px">POINTS EARNED</div>
+        </div>
+      </div>
+      ${sorted.map(r => {
+        const pts = parseInt(r[5])||0;
+        const badge = pts > 0
+          ? `<span style="background:rgba(0,229,204,0.12);border:1px solid #00E5CC;color:#00E5CC;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">⚡ +${pts}</span>`
+          : `<span style="background:rgba(255,107,107,0.1);border:1px solid rgba(255,107,107,0.3);color:#FF6B6B;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">No pts</span>`;
+        return `
+          <div style="background:#0D0618;border:1px solid #3D2060;border-radius:8px;padding:12px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div style="font-size:14px;font-weight:600;flex:1;margin-right:8px">${esc(r[2]||'')}</div>
+              ${badge}
+            </div>
+            <div style="font-size:12px;color:#9B8AAE">📅 ${esc(r[6]||'')} &nbsp;📖 ${esc(String(r[3]||''))} days</div>
+          </div>`;
+      }).join('')}
+      <div style="text-align:center;margin-top:8px">
+        <button id="btn-reset" style="background:none;border:none;color:#9B8AAE;font-size:12px;text-decoration:underline;cursor:pointer">Not you? Switch account</button>
+      </div>`;
+
+    document.getElementById('btn-reset').addEventListener('click', function() {
+      localStorage.removeItem('sw_serial');
+      localStorage.removeItem('sw_phone');
+      document.getElementById('history-container').innerHTML = '';
+      document.getElementById('history-phone').value = '';
+      log('Session cleared');
+    });
+  }
+</script>
+</body>
+</html>
